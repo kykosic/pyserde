@@ -15,7 +15,7 @@
   </a>
 </p>
 <p align="center">
-  <a href="https://yukinarit.github.io/pyserde/guide">Guide</a> | <a href="https://yukinarit.github.io/pyserde/api/serde.html">API Docs</a> | <a href="https://github.com/yukinarit/pyserde/tree/main/examples">Examples</a>
+  <a href="https://yukinarit.github.io/pyserde/guide/en">Guide</a> | <a href="https://yukinarit.github.io/pyserde/api/serde.html">API Docs</a> | <a href="https://github.com/yukinarit/pyserde/tree/main/examples">Examples</a>
 </p>
 
 ## Overview
@@ -85,8 +85,8 @@ Foo(i=10, s='foo', f=100.0, b=True)
 - [Union Representation](https://github.com/yukinarit/pyserde/blob/main/docs/en/union.md)
 - [Forward reference](https://github.com/yukinarit/pyserde/blob/main/docs/en/decorators.md#how-can-i-use-forward-references)
 - [PEP563 Postponed Evaluation of Annotations](https://github.com/yukinarit/pyserde/blob/main/docs/en/decorators.md#pep563-postponed-evaluation-of-annotations)
-- [PEP585 type hinting](https://github.com/yukinarit/pyserde/blob/main/docs/en/getting-started.md#pep585-and-pep604)
-- [PEP604 Union operator](https://github.com/yukinarit/pyserde/blob/main/docs/en/getting-started.md#pep585-and-pep604)
+- [PEP585 Type Hinting Generics In Standard Collections](https://github.com/yukinarit/pyserde/blob/main/docs/en/getting-started.md#pep585-and-pep604)
+- [PEP604 Allow writing union types as X | Y](https://github.com/yukinarit/pyserde/blob/main/docs/en/getting-started.md#pep585-and-pep604)
 - [PEP681 Data Class Transform](https://github.com/yukinarit/pyserde/blob/main/docs/en/decorators.md#serde)
 - [Case Conversion](https://github.com/yukinarit/pyserde/blob/main/docs/en/class-attributes.md#rename_all)
 - [Rename](https://github.com/yukinarit/pyserde/blob/main/docs/en/field-attributes.md#rename)
@@ -109,7 +109,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/yukinarit"><img src="https://avatars.githubusercontent.com/u/2347533?v=4?s=60" width="60px;" alt="yukinarit"/><br /><sub><b>yukinarit</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=yukinarit" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/alexmisk"><img src="https://avatars.githubusercontent.com/u/4103218?v=4?s=60" width="60px;" alt="Alexander Miskaryan"/><br /><sub><b>Alexander Miskaryan</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=alexmisk" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/ydylla"><img src="https://avatars.githubusercontent.com/u/17772145?v=4?s=60" width="60px;" alt="ydylla"/><br /><sub><b>ydylla</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=ydylla" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/kmsquire"><img src="https://avatars.githubusercontent.com/u/223250?v=4?s=60" width="60px;" alt="Kevin Squire"/><br /><sub><b>Kevin Squire</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=kmsquire" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/kmsquire"><img src="https://avatars.githubusercontent.com/u/223250?v=4?s=60" width="60px;" alt="Kevin Squire"/><br /><sub><b>Kevin Squire</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=kmsquire" title="Code">💻</a> <a href="https://github.com/yukinarit/pyserde/commits?author=kmsquire" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://yushiomote.org/"><img src="https://avatars.githubusercontent.com/u/3733915?v=4?s=60" width="60px;" alt="Yushi OMOTE"/><br /><sub><b>Yushi OMOTE</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=YushiOMOTE" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://kngwyu.github.io/"><img src="https://avatars.githubusercontent.com/u/16046705?v=4?s=60" width="60px;" alt="Yuji Kanagawa"/><br /><sub><b>Yuji Kanagawa</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=kngwyu" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://kigawas.me/"><img src="https://avatars.githubusercontent.com/u/4182346?v=4?s=60" width="60px;" alt="Weiliang Li"/><br /><sub><b>Weiliang Li</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=kigawas" title="Code">💻</a></td>
@@ -130,6 +130,11 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
       <td align="center" valign="top" width="14.28%"><a href="https://kobzol.github.io/"><img src="https://avatars.githubusercontent.com/u/4539057?v=4?s=60" width="60px;" alt="Jakub Beránek"/><br /><sub><b>Jakub Beránek</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=Kobzol" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Fredrik-Reinholdsen"><img src="https://avatars.githubusercontent.com/u/11893023?v=4?s=60" width="60px;" alt="Fredrik Reinholdsen"/><br /><sub><b>Fredrik Reinholdsen</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=Fredrik-Reinholdsen" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://www.patreon.com/nicoddemus"><img src="https://avatars.githubusercontent.com/u/1085180?v=4?s=60" width="60px;" alt="Bruno Oliveira"/><br /><sub><b>Bruno Oliveira</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=nicoddemus" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://kylekosic.dev/"><img src="https://avatars.githubusercontent.com/u/23020003?v=4?s=60" width="60px;" alt="Kyle Kosic"/><br /><sub><b>Kyle Kosic</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=kykosic" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/gpetrovic-meltin"><img src="https://avatars.githubusercontent.com/u/72957645?v=4?s=60" width="60px;" alt="Gajo Petrovic"/><br /><sub><b>Gajo Petrovic</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=gpetrovic-meltin" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/m472"><img src="https://avatars.githubusercontent.com/u/6155240?v=4?s=60" width="60px;" alt="m472"/><br /><sub><b>m472</b></sub></a><br /><a href="https://github.com/yukinarit/pyserde/commits?author=m472" title="Code">💻</a></td>
     </tr>
   </tbody>
   <tfoot>

@@ -17,7 +17,9 @@ __all__ = ["from_msgpack", "to_msgpack"]
 
 class MsgPackSerializer(Serializer[bytes]):
     @classmethod
-    def serialize(cls, obj: Any, use_bin_type: bool = True, ext_type_code: Optional[int] = None, **opts: Any) -> bytes:
+    def serialize(
+        cls, obj: Any, use_bin_type: bool = True, ext_type_code: Optional[int] = None, **opts: Any
+    ) -> bytes:
         if "default" not in opts:
             opts["default"] = encode_numpy
         if ext_type_code is not None:
@@ -30,12 +32,15 @@ class MsgPackSerializer(Serializer[bytes]):
 
 class MsgPackDeserializer(Deserializer[bytes]):
     @classmethod
-    def deserialize(cls, data: bytes, raw: bool = False, use_list: bool = False, **opts: Any) -> Any:
+    def deserialize(
+        cls, data: bytes, raw: bool = False, use_list: bool = False, **opts: Any
+    ) -> Any:
         return msgpack.unpackb(data, raw=raw, use_list=use_list, **opts)
 
 
 def to_msgpack(
     obj: Any,
+    cls: Optional[Any] = None,
     se: Type[Serializer[bytes]] = MsgPackSerializer,
     named: bool = True,
     ext_dict: Optional[Dict[Type[Any], int]] = None,
@@ -44,14 +49,16 @@ def to_msgpack(
     """
     Serialize the object into MsgPack.
 
-    You can pass any serializable `obj`. If `ext_dict` option is specified, `obj` is encoded as a `msgpack.ExtType`
-    If you supply other keyword arguments, they will be passed in `msgpack.packb` function.
+    You can pass any serializable `obj`. If `ext_dict` option is specified, `obj` is encoded
+    as a `msgpack.ExtType` If you supply other keyword arguments, they will be passed in
+    `msgpack.packb` function.
 
-    If `named` is True, field names are preserved, namely the object is encoded as `dict` then serialized into MsgPack.
-    If `named` is False, the object is encoded as `tuple` then serialized into MsgPack. `named=False` will produces
-    compact binary.
+    If `named` is True, field names are preserved, namely the object is encoded as `dict` then
+    serialized into MsgPack.  If `named` is False, the object is encoded as `tuple` then serialized
+    into MsgPack. `named=False` will produces compact binary.
 
-    If you want to use the other msgpack package, you can subclass `MsgPackSerializer` and implement your own logic.
+    If you want to use the other msgpack package, you can subclass `MsgPackSerializer` and
+    implement your own logic.
     """
     ext_type_code = None
     if ext_dict is not None:
@@ -60,9 +67,10 @@ def to_msgpack(
         if ext_type_code is None:
             raise SerdeError(f"Could not find type code for {obj_type.__name__} in ext_dict")
 
-    to_func = to_dict if named else to_tuple
+    kwargs: Any = {"c": cls, "reuse_instances": False, "convert_sets": True}
+    dict_or_tuple = to_dict(obj, **kwargs) if named else to_tuple(obj, **kwargs)
     return se.serialize(
-        to_func(obj, reuse_instances=False, convert_sets=True),
+        dict_or_tuple,
         ext_type_code=ext_type_code,
         **opts,
     )
@@ -103,11 +111,12 @@ def from_msgpack(
     """
     Deserialize from MsgPack into the object.
 
-    `c` is a class obejct and `s` is MsgPack binary. If `ext_dict` option is specified, `c` is ignored and type is
-    inferred from `msgpack.ExtType` If you supply other keyword arguments, they will be passed in
-    `msgpack.unpackb` function.
+    `c` is a class obejct and `s` is MsgPack binary. If `ext_dict` option is specified,
+    `c` is ignored and type is inferred from `msgpack.ExtType` If you supply other keyword
+    arguments, they will be passed in `msgpack.unpackb` function.
 
-    If you want to use the other msgpack package, you can subclass `MsgPackDeserializer` and implement your own logic.
+    If you want to use the other msgpack package, you can subclass `MsgPackDeserializer`
+    and implement your own logic.
     """
     if ext_dict is not None:
         ext = de.deserialize(s, **opts)

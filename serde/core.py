@@ -1,24 +1,38 @@
 """
 pyserde core module.
 """
+from __future__ import annotations
 import dataclasses
 import enum
 import functools
 import logging
+import sys
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Union,
+    Generic,
+    TypeVar,
+    Tuple,
+    overload,
+    Mapping,
+)
 
 import casefy
 import jinja2
 from typing_extensions import Type, get_type_hints
 
 from .compat import (
+    DataclassField,
+    T,
     SerdeError,
     dataclass_fields,
     get_origin,
-    has_default,
-    has_default_factory,
     is_bare_dict,
     is_bare_list,
     is_bare_set,
@@ -36,10 +50,21 @@ from .compat import (
     is_variable_tuple,
     type_args,
     typename,
+    _WithTagging,
 )
 from .numpy import is_numpy_available, is_numpy_type
 
-__all__ = ["SerdeScope", "gen", "add_func", "Func", "Field", "fields", "FlattenOpts", "conv", "union_func_name"]
+__all__ = [
+    "Scope",
+    "gen",
+    "add_func",
+    "Func",
+    "Field",
+    "fields",
+    "FlattenOpts",
+    "conv",
+    "union_func_name",
+]
 
 logger = logging.getLogger("serde")
 
@@ -68,18 +93,160 @@ def init(debug: bool = False) -> None:
 
 
 @dataclass
-class SerdeScope:
+class Cache:
+    """
+    Cache the generated code for non-dataclass classes.
+
+    for example, a type not bound in a dataclass is passed in from_json
+
+    ```
+    from_json(Union[Foo, Bar], ...)
+    ```
+
+    It creates the following wrapper dataclass on the fly,
+
+    ```
+    @serde
+    @dataclass
+    class Union_Foo_bar:
+        v: Union[Foo, Bar]
+    ```
+
+    Then store this class in this cache. Whenever the same type is passed,
+    the class is retrieved from this cache. So the overhead of the codegen
+    should be only once.
+    """
+
+    classes: Dict[str, Type[Any]] = dataclasses.field(default_factory=dict)
+
+    def _get_class(self, cls: Type[Any]) -> Type[Any]:
+        """
+        Get a wrapper class from the the cache. If not found, it will generate
+        the class and store it in the cache.
+        """
+        class_name = f"Wrapper{typename(cls)}"
+        wrapper = self.classes.get(class_name)
+        return wrapper or self._generate_class(cls)
+
+    def _generate_class(self, cls: Type[Any]) -> Type[Any]:
+        """
+        Generate a wrapper dataclass then make the it (de)serializable using
+        @serde decorator.
+        """
+        from . import serde
+
+        class_name = f"Wrapper{typename(cls)}"
+        logger.debug(f"Generating a wrapper class code for {class_name}")
+
+        wrapper = dataclasses.make_dataclass(class_name, [("v", cls)])
+
+        serde(wrapper)
+        self.classes[class_name] = wrapper
+
+        logger.debug(f"(de)serializing code for {class_name} was generated")
+        return wrapper
+
+    def serialize(self, cls: Type[Any], obj: Any) -> Any:
+        """
+        Serialize the specified type of object into dict or tuple.
+        """
+        wrapper = self._get_class(cls)
+        scope: Scope = getattr(wrapper, SERDE_SCOPE)
+        data = scope.funcs[TO_DICT](wrapper(obj), reuse_instances=False, convert_sets=True)
+
+        logging.debug(f"Intermediate value: {data}")
+
+        return data["v"]
+
+    def deserialize(self, cls: Type[T], obj: Any) -> T:
+        """
+        Deserialize from dict or tuple into the specified type.
+        """
+        wrapper = self._get_class(cls)
+        scope: Scope = getattr(wrapper, SERDE_SCOPE)
+        return scope.funcs[FROM_DICT](data={"v": obj}).v  # type: ignore
+
+    def _get_union_class(self, cls: Type[Any]) -> Optional[Type[Any]]:
+        """
+        Get a wrapper class from the the cache. If not found, it will generate
+        the class and store it in the cache.
+        """
+        union_cls, tagging = _extract_from_with_tagging(cls)
+        class_name = union_func_name(
+            f"{tagging.produce_unique_class_name()}Union", list(type_args(union_cls))
+        )
+        wrapper = self.classes.get(class_name)
+        return wrapper or self._generate_union_class(cls)
+
+    def _generate_union_class(self, cls: Type[Any]) -> Type[Any]:
+        """
+        Generate a wrapper dataclass then make the it (de)serializable using
+        @serde decorator.
+        """
+        import serde
+
+        union_cls, tagging = _extract_from_with_tagging(cls)
+        class_name = union_func_name(
+            f"{tagging.produce_unique_class_name()}Union", list(type_args(union_cls))
+        )
+        wrapper = dataclasses.make_dataclass(class_name, [("v", union_cls)])
+        serde.serde(wrapper, tagging=tagging)
+        self.classes[class_name] = wrapper
+        return wrapper
+
+    def serialize_union(self, cls: Type[Any], obj: Any) -> Any:
+        """
+        Serialize the specified Union into dict or tuple.
+        """
+        union_cls, _ = _extract_from_with_tagging(cls)
+        wrapper = self._get_union_class(cls)
+        scope: Scope = getattr(wrapper, SERDE_SCOPE)
+        func_name = union_func_name(UNION_SE_PREFIX, list(type_args(union_cls)))
+        return scope.funcs[func_name](obj, False, False)
+
+    def deserialize_union(self, cls: Type[T], data: Any) -> T:
+        """
+        Deserialize from dict or tuple into the specified Union.
+        """
+        union_cls, _ = _extract_from_with_tagging(cls)
+        wrapper = self._get_union_class(cls)
+        scope: Scope = getattr(wrapper, SERDE_SCOPE)
+        func_name = union_func_name(UNION_DE_PREFIX, list(type_args(union_cls)))
+        return scope.funcs[func_name](cls=union_cls, data=data)  # type: ignore
+
+
+def _extract_from_with_tagging(maybe_with_tagging: Any) -> Tuple[Any, Tagging]:
+    try:
+        if isinstance(maybe_with_tagging, _WithTagging):
+            union_cls = maybe_with_tagging.inner
+            tagging = maybe_with_tagging.tagging
+        else:
+            raise Exception()
+    except Exception:
+        union_cls = maybe_with_tagging
+        tagging = ExternalTagging
+
+    return (union_cls, tagging)
+
+
+CACHE = Cache()
+""" Global cache variable for non-dataclass classes """
+
+
+@dataclass
+class Scope:
     """
     Container to store types and functions used in code generation context.
     """
 
     cls: Type[Any]
-    """ The exact class this scope is for (needed to distinguish scopes between inherited classes) """
+    """ The exact class this scope is for
+    (needed to distinguish scopes between inherited classes) """
 
-    funcs: Dict[str, Callable] = dataclasses.field(default_factory=dict)
+    funcs: Dict[str, Callable[..., Any]] = dataclasses.field(default_factory=dict)
     """ Generated serialize and deserialize functions """
 
-    defaults: Dict[str, Union[Callable, Any]] = dataclasses.field(default_factory=dict)
+    defaults: Dict[str, Union[Callable[..., Any], Any]] = dataclasses.field(default_factory=dict)
     """ Default values of the dataclass fields (factories & normal values) """
 
     code: Dict[str, str] = dataclasses.field(default_factory=dict)
@@ -134,17 +301,19 @@ class SerdeScope:
 
         return "\n".join(res)
 
-    def _justify(self, s: str, length=50) -> str:
+    def _justify(self, s: str, length: int = 50) -> str:
         white_spaces = int((50 - len(s)) / 2)
         return " " * (white_spaces if white_spaces > 0 else 0) + s
 
 
-def raise_unsupported_type(obj):
+def raise_unsupported_type(obj: Any) -> None:
     # needed because we can not render a raise statement everywhere, e.g. as argument
     raise SerdeError(f"Unsupported type: {typename(type(obj))}")
 
 
-def gen(code: str, globals: Dict = None, locals: Dict = None) -> str:
+def gen(
+    code: str, globals: Optional[Dict[str, Any]] = None, locals: Optional[Dict[str, Any]] = None
+) -> str:
     """
     A wrapper of builtin `exec` function.
     """
@@ -160,11 +329,11 @@ def gen(code: str, globals: Dict = None, locals: Dict = None) -> str:
     return code
 
 
-def add_func(serde_scope: SerdeScope, func_name: str, func_code: str, globals: Dict) -> None:
+def add_func(serde_scope: Scope, func_name: str, func_code: str, globals: Dict[str, Any]) -> None:
     """
-    Generate a function and add it to a SerdeScope's `funcs` dictionary.
+    Generate a function and add it to a Scope's `funcs` dictionary.
 
-    * `serde_scope`: the SerdeScope instance to modify
+    * `serde_scope`: the Scope instance to modify
     * `func_name`: the name of the function
     * `func_code`: the source code of the function
     * `globals`: global variables that should be accessible to the generated function
@@ -177,13 +346,13 @@ def add_func(serde_scope: SerdeScope, func_name: str, func_code: str, globals: D
         serde_scope.code[func_name] = code
 
 
-def is_instance(obj: Any, typ: Type[Any]) -> bool:
+def is_instance(obj: Any, typ: Any) -> bool:
     """
     Type check function that works like `isinstance` but it accepts
     Subscripted Generics e.g. `List[int]`.
     """
     if dataclasses.is_dataclass(typ):
-        serde_scope: Optional[SerdeScope] = getattr(typ, SERDE_SCOPE, None)
+        serde_scope: Optional[Scope] = getattr(typ, SERDE_SCOPE, None)
         if serde_scope:
             try:
                 serde_scope.funcs[TYPE_CHECK](obj)
@@ -205,10 +374,13 @@ def is_instance(obj: Any, typ: Type[Any]) -> bool:
     elif is_generic(typ):
         return is_generic_instance(obj, typ)
     elif is_literal(typ):
-        return True  # TODO
+        return True
     elif is_new_type_primitive(typ):
-        inner = typ.__supertype__
-        return isinstance(obj, inner)
+        inner = getattr(typ, "__supertype__", None)
+        if type(inner) is type:
+            return isinstance(obj, inner)
+        else:
+            return False
     elif typ is Ellipsis:
         return True
     else:
@@ -293,13 +465,13 @@ class Func:
     multiple fields receives `skip_if` attribute.
     """
 
-    inner: Callable
+    inner: Callable[..., Any]
     """ Function to wrap in """
 
     mangeld: str = ""
     """ Mangled function name """
 
-    def __call__(self, v):
+    def __call__(self, v: Any) -> None:
         return self.inner(v)  # type: ignore
 
     @property
@@ -310,12 +482,12 @@ class Func:
         return self.mangeld
 
 
-def skip_if_false(v):
+def skip_if_false(v: Any) -> Any:
     return not bool(v)
 
 
-def skip_if_default(v, default=None):
-    return v == default
+def skip_if_default(v: Any, default: Optional[Any] = None) -> Any:
+    return v == default  # Why return type is deduced to be Any?
 
 
 @dataclass
@@ -326,19 +498,19 @@ class FlattenOpts:
 
 
 def field(
-    *args,
+    *args: Any,
     rename: Optional[str] = None,
     alias: Optional[List[str]] = None,
     skip: Optional[bool] = None,
-    skip_if: Optional[Callable] = None,
+    skip_if: Optional[Callable[[Any], Any]] = None,
     skip_if_false: Optional[bool] = None,
     skip_if_default: Optional[bool] = None,
-    serializer=None,
-    deserializer=None,
+    serializer: Optional[Callable[..., Any]] = None,
+    deserializer: Optional[Callable[..., Any]] = None,
     flatten: Optional[Union[FlattenOpts, bool]] = None,
-    metadata=None,
-    **kwargs,
-):
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs: Any,
+) -> Any:
     """
     Declare a field with parameters.
     """
@@ -370,23 +542,27 @@ def field(
 
 
 @dataclass
-class Field:
+class Field(Generic[T]):
     """
     Field class is similar to `dataclasses.Field`. It provides pyserde specific options.
-
 
     `type`, `name`, `default` and `default_factory` are the same members as `dataclasses.Field`.
     """
 
-    type: Type[Any]
+    type: Type[T]
+    """ Type of Field """
     name: Optional[str]
+    """ Name of Field """
     default: Any = field(default_factory=dataclasses._MISSING_TYPE)
+    """ Default value of Field """
     default_factory: Any = field(default_factory=dataclasses._MISSING_TYPE)
+    """ Default factory method of Field """
     init: bool = field(default_factory=dataclasses._MISSING_TYPE)
     repr: Any = field(default_factory=dataclasses._MISSING_TYPE)
     hash: Any = field(default_factory=dataclasses._MISSING_TYPE)
     compare: Any = field(default_factory=dataclasses._MISSING_TYPE)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    kw_only: bool = False
     case: Optional[str] = None
     alias: List[str] = field(default_factory=list)
     rename: Optional[str] = None
@@ -398,9 +574,10 @@ class Field:
     deserializer: Optional[Func] = None  # Custom field deserializer.
     flatten: Optional[FlattenOpts] = None
     parent: Optional[Type[Any]] = None
+    type_args: Optional[List[str]] = None
 
     @classmethod
-    def from_dataclass(cls, f: dataclasses.Field, parent: Optional[Type[Any]] = None) -> "Field":
+    def from_dataclass(cls, f: DataclassField, parent: Optional[Type[Any]] = None) -> Field[T]:
         """
         Create `Field` object from `dataclasses.Field`.
         """
@@ -433,11 +610,13 @@ class Field:
         if flatten is True:
             flatten = FlattenOpts()
 
+        kw_only = bool(f.kw_only) if sys.version_info >= (3, 10) else False
+
         return cls(
             f.type,
             f.name,
             default=f.default,
-            default_factory=f.default_factory,  # type: ignore
+            default_factory=f.default_factory,
             init=f.init,
             repr=f.repr,
             hash=f.hash,
@@ -451,9 +630,10 @@ class Field:
             deserializer=deserializer,
             flatten=flatten,
             parent=parent,
+            kw_only=kw_only,
         )
 
-    def to_dataclass(self) -> dataclasses.Field:
+    def to_dataclass(self) -> DataclassField:
         f = dataclasses.Field(
             default=self.default,
             default_factory=self.default_factory,
@@ -462,6 +642,7 @@ class Field:
             hash=self.hash,
             compare=self.compare,
             metadata=self.metadata,
+            kw_only=self.kw_only,
         )
         assert self.name
         f.name = self.name
@@ -476,7 +657,7 @@ class Field:
         return self.type == self.parent
 
     @staticmethod
-    def mangle(field: dataclasses.Field, name: str) -> str:
+    def mangle(field: DataclassField, name: str) -> str:
         """
         Get mangled name based on field name.
         """
@@ -490,10 +671,12 @@ class Field:
         return conv(self, case or self.case)
 
     def supports_default(self) -> bool:
-        return not getattr(self, "iterbased", False) and (has_default(self) or has_default_factory(self))
+        return not getattr(self, "iterbased", False) and (
+            has_default(self) or has_default_factory(self)
+        )
 
 
-F = TypeVar("F", bound=Field)
+F = TypeVar("F", bound=Field[Any])
 
 
 def fields(field_cls: Type[F], cls: Type[Any], serialize_class_var: bool = False) -> List[F]:
@@ -507,10 +690,10 @@ def fields(field_cls: Type[F], cls: Type[Any], serialize_class_var: bool = False
             if is_class_var(typ):
                 fields.append(field_cls(typ, name, default=getattr(cls, name)))
 
-    return fields
+    return fields  # type: ignore
 
 
-def conv(f: Field, case: Optional[str] = None) -> str:
+def conv(f: Field[Any], case: Optional[str] = None) -> str:
     """
     Convert field name.
     """
@@ -518,7 +701,9 @@ def conv(f: Field, case: Optional[str] = None) -> str:
     if case:
         casef = getattr(casefy, case, None)
         if not casef:
-            raise SerdeError(f"Unkown case type: {f.case}. Pass the name of case supported by 'casefy' package.")
+            raise SerdeError(
+                f"Unkown case type: {f.case}. Pass the name of case supported by 'casefy' package."
+            )
         name = casef(name)
     if f.rename:
         name = f.rename
@@ -527,7 +712,7 @@ def conv(f: Field, case: Optional[str] = None) -> str:
     return name
 
 
-def union_func_name(prefix: str, union_args: List[Type[Any]]) -> str:
+def union_func_name(prefix: str, union_args: List[Any]) -> str:
     """
     Generate a function name that contains all union types
 
@@ -553,7 +738,9 @@ def literal_func_name(literal_args: List[Any]) -> str:
     'literal_de_r_str_w_str_a_str_x_str_r__str_w__str_a__str_x__str'
     """
     return re.sub(
-        r"[^A-Za-z0-9]", "_", f"{LITERAL_DE_PREFIX}_{'_'.join(f'{a}_{typename(type(a))}' for a in literal_args)}"
+        r"[^A-Za-z0-9]",
+        "_",
+        f"{LITERAL_DE_PREFIX}_{'_'.join(f'{a}_{typename(type(a))}' for a in literal_args)}",
     )
 
 
@@ -574,46 +761,105 @@ class Tagging:
     content: Optional[str] = None
     kind: Kind = Kind.External
 
-    def is_external(self):
+    def is_external(self) -> bool:
         return self.kind == self.Kind.External
 
-    def is_internal(self):
+    def is_internal(self) -> bool:
         return self.kind == self.Kind.Internal
 
-    def is_adjacent(self):
+    def is_adjacent(self) -> bool:
         return self.kind == self.Kind.Adjacent
 
-    def is_untagged(self):
+    def is_untagged(self) -> bool:
         return self.kind == self.Kind.Untagged
 
     @classmethod
-    def is_taggable(cls, typ):
+    def is_taggable(cls, typ: Type[Any]) -> bool:
         return dataclasses.is_dataclass(typ)
 
-    def check(self):
+    def check(self) -> None:
         if self.is_internal() and self.tag is None:
             raise SerdeError('"tag" must be specified in InternalTagging')
         if self.is_adjacent() and (self.tag is None or self.content is None):
             raise SerdeError('"tag" and "content" must be specified in AdjacentTagging')
 
+    def produce_unique_class_name(self) -> str:
+        """
+        Produce a unique class name for this tagging. The name is used for generated
+        wrapper dataclass and stored in `Cache`.
+        """
+        if self.is_internal():
+            tag = casefy.pascalcase(self.tag)  # type: ignore
+            if not tag:
+                raise SerdeError('"tag" must be specified in InternalTagging')
+            return f"Internal{tag}"
+        elif self.is_adjacent():
+            tag = casefy.pascalcase(self.tag)  # type: ignore
+            content = casefy.pascalcase(self.content)  # type: ignore
+            if not tag:
+                raise SerdeError('"tag" must be specified in AdjacentTagging')
+            if not content:
+                raise SerdeError('"content" must be specified in AdjacentTagging')
+            return f"Adjacent{tag}{content}"
+        else:
+            return self.kind.name
+
+    def __call__(self, cls: T) -> _WithTagging[T]:
+        return _WithTagging(cls, self)
+
+
+@overload
+def InternalTagging(tag: str) -> Tagging:
+    ...
+
+
+@overload
+def InternalTagging(tag: str, cls: T) -> _WithTagging[T]:
+    ...
+
+
+def InternalTagging(tag: str, cls: Optional[T] = None) -> Union[Tagging, _WithTagging[T]]:
+    tagging = Tagging(tag, kind=Tagging.Kind.Internal)
+    if cls:
+        return tagging(cls)
+    else:
+        return tagging
+
+
+@overload
+def AdjacentTagging(tag: str, content: str) -> Tagging:
+    ...
+
+
+@overload
+def AdjacentTagging(tag: str, content: str, cls: T) -> _WithTagging[T]:
+    ...
+
+
+def AdjacentTagging(
+    tag: str, content: str, cls: Optional[T] = None
+) -> Union[Tagging, _WithTagging[T]]:
+    tagging = Tagging(tag, content, kind=Tagging.Kind.Adjacent)
+    if cls:
+        return tagging(cls)
+    else:
+        return tagging
+
 
 ExternalTagging = Tagging()
 
-InternalTagging = functools.partial(Tagging, kind=Tagging.Kind.Internal)
-
-AdjacentTagging = functools.partial(Tagging, kind=Tagging.Kind.Adjacent)
-
 Untagged = Tagging(kind=Tagging.Kind.Untagged)
+
 
 DefaultTagging = ExternalTagging
 
 
-def ensure(expr, description):
+def ensure(expr: Any, description: str) -> None:
     if not expr:
         raise Exception(description)
 
 
-def should_impl_dataclass(cls):
+def should_impl_dataclass(cls: Type[Any]) -> bool:
     """
     Test if class doesn't have @dataclass.
 
@@ -638,9 +884,6 @@ def should_impl_dataclass(cls):
     annotations = getattr(cls, "__annotations__", {})
     if not annotations:
         return False
-
-    if len(annotations) != len(dataclasses.fields(cls)):
-        return True
 
     field_names = [field.name for field in dataclass_fields(cls)]
     for field_name in annotations:
@@ -718,7 +961,7 @@ class TypeCheck:
     def is_coerce(self) -> bool:
         return self.kind == self.Kind.Coerce
 
-    def __call__(self, **kwargs) -> "TypeCheck":
+    def __call__(self, **kwargs: Any) -> TypeCheck:
         # TODO
         return self
 
@@ -738,3 +981,36 @@ def is_coercible(typ: Type[Any], obj: Any) -> bool:
     if obj is None:
         return False
     return True
+
+
+def has_default(field: Field[Any]) -> bool:
+    """
+    Test if the field has default value.
+
+    >>> @dataclasses.dataclass
+    ... class C:
+    ...     a: int
+    ...     d: int = 10
+    >>> has_default(dataclasses.fields(C)[0])
+    False
+    >>> has_default(dataclasses.fields(C)[1])
+    True
+    """
+    return not isinstance(field.default, dataclasses._MISSING_TYPE)
+
+
+def has_default_factory(field: Field[Any]) -> bool:
+    """
+    Test if the field has default factory.
+
+    >>> from typing import Dict
+    >>> @dataclasses.dataclass
+    ... class C:
+    ...     a: int
+    ...     d: Dict = dataclasses.field(default_factory=dict)
+    >>> has_default_factory(dataclasses.fields(C)[0])
+    False
+    >>> has_default_factory(dataclasses.fields(C)[1])
+    True
+    """
+    return not isinstance(field.default_factory, dataclasses._MISSING_TYPE)

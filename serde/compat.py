@@ -40,12 +40,24 @@ if sys.version_info[:2] == (3, 7):
 else:
     Literal = typing.Literal
 
+# Create alias for `dataclasses.Field` because `dataclasses.Field` is a generic
+# class since 3.9 but is not in 3.7 and 3.8.
+if sys.version_info[:2] <= (3, 8):
+    DataclassField = dataclasses.Field
+else:
+    DataclassField = dataclasses.Field[Any]
+
 try:
     if sys.version_info[:2] <= (3, 8):
         import numpy as np
 
         def __is_nptype(tp):
-            return getattr(tp, "__origin__", None) in (np.ndarray, np.dtype)
+            origin = getattr(tp, "__origin__", None)
+            ndarray = getattr(np, "ndarray", None)
+            dtype = getattr(np, "dtype", None)
+            if not origin or not ndarray or not dtype:
+                return False
+            return origin in (ndarray, dtype)
 
         # If the given type is NDArray or _DType, returns __origin__ or __args__.
         # This should work since the only GenericAliases that current NumPy (1.23)
@@ -53,13 +65,13 @@ try:
         # Note: these functions are only needed on Python 3.8 or earlier.
         # On Python >= 3.9, numpy.ndarray[...] and numpy.dtype[...] are instances of
         # the builtin genericalias class.
-        def get_np_origin(tp):
+        def get_np_origin(tp: Type[Any]) -> Optional[Any]:
             if __is_nptype(tp):
-                return tp.__origin__
+                return getattr(tp, "__origin__", None)
             else:
                 return None
 
-        def get_np_args(tp):
+        def get_np_args(tp: Any) -> Tuple[Any, ...]:
             if __is_nptype(tp):
                 return tp.__args__
             else:
@@ -109,6 +121,18 @@ DateTimeTypes = (datetime.date, datetime.time, datetime.datetime)
 """ List of datetime types """
 
 
+@dataclasses.dataclass
+class _WithTagging(Generic[T]):
+    """
+    Intermediate data structure for (de)serializaing Union without dataclass.
+    """
+
+    inner: T
+    """ Union type .e.g Union[Foo,Bar] passed in from_obj. """
+    tagging: Any
+    """ Union Tagging """
+
+
 class SerdeError(Exception):
     """
     Serde error class.
@@ -135,7 +159,9 @@ def get_origin(typ: Any) -> Optional[Any]:
     Provide `get_origin` that works in all python versions.
     """
     try:
-        return typing.get_origin(typ) or get_np_origin(typ)  # python>=3.8 typing module has get_origin.
+        return typing.get_origin(typ) or get_np_origin(
+            typ
+        )  # python>=3.8 typing module has get_origin.
     except AttributeError:
         return typing_extensions.get_origin(typ) or get_np_origin(typ)
 
@@ -150,7 +176,7 @@ def get_args(typ: Any) -> Tuple[Any, ...]:
         return typing_extensions.get_args(typ) or get_np_args(typ)
 
 
-def typename(typ: Type[Any], with_typing_module: bool = False) -> str:  # noqa: C901
+def typename(typ: Any, with_typing_module: bool = False) -> str:
     """
     >>> from typing import List, Dict, Set, Any
     >>> typename(int)
@@ -232,8 +258,14 @@ def typename(typ: Type[Any], with_typing_module: bool = False) -> str:  # noqa: 
             return f"{mod}Tuple"
     elif is_generic(typ):
         origin = get_origin(typ)
-        assert origin is not None
+        if origin is None:
+            raise SerdeError("Could not extract origin class from generic class")
+
+        if not isinstance(origin.__name__, str):
+            raise SerdeError("Name of generic class is not string")
+
         return origin.__name__
+
     elif is_literal(typ):
         args = type_args(typ)
         if not args:
@@ -247,13 +279,17 @@ def typename(typ: Type[Any], with_typing_module: bool = False) -> str:  # noqa: 
         # Get super type for NewType
         inner = getattr(typ, "__supertype__", None)
         if inner:
-            return typename(typ.__supertype__)
+            return typename(inner)
 
         name: Optional[str] = getattr(typ, "_name", None)
         if name:
             return name
         else:
-            return typ.__name__
+            name = getattr(typ, "__name__", None)
+            if isinstance(name, str):
+                return name
+            else:
+                raise SerdeError(f"Could not get a type name from: {typ}")
 
 
 def type_args(typ: Any) -> Tuple[Type[Any], ...]:
@@ -270,7 +306,7 @@ def type_args(typ: Any) -> Tuple[Type[Any], ...]:
         return get_args(typ)
 
 
-def union_args(typ: Union) -> Tuple[Type[Any], ...]:
+def union_args(typ: Any) -> Tuple[Type[Any], ...]:
     if not is_union(typ):
         raise TypeError(f"{typ} is not Union")
     args = type_args(typ)
@@ -309,7 +345,8 @@ def dataclass_fields(cls: Type[Any]) -> Iterator[dataclasses.Field]:  # type: ig
         if sys.version_info[:2] != (3, 6) and isinstance(real_type, typing.ForwardRef):
             raise SerdeError(
                 f"Failed to resolve {real_type} for {typename(cls)}.\n\n"
-                f"Make sure you are calling deserialize & serialize after all classes are globally visible."
+                f"Make sure you are calling deserialize & serialize after all classes are "
+                "globally visible."
             )
         if real_type is not None:
             f.type = real_type
@@ -320,7 +357,7 @@ def dataclass_fields(cls: Type[Any]) -> Iterator[dataclasses.Field]:  # type: ig
 TypeLike = Union[Type[Any], typing.Any]
 
 
-def iter_types(cls: TypeLike) -> List[TypeLike]:  # noqa: C901
+def iter_types(cls: TypeLike) -> List[TypeLike]:
     """
     Iterate field types recursively.
 
@@ -329,7 +366,7 @@ def iter_types(cls: TypeLike) -> List[TypeLike]:  # noqa: C901
     """
     lst: Set[TypeLike] = set()
 
-    def recursive(cls: TypeLike) -> None:  # noqa: C901
+    def recursive(cls: TypeLike) -> None:
         if cls in lst:
             return
 
@@ -370,14 +407,14 @@ def iter_types(cls: TypeLike) -> List[TypeLike]:  # noqa: C901
     return list(lst)
 
 
-def iter_unions(cls: TypeLike) -> List[TypeLike]:  # noqa: C901
+def iter_unions(cls: TypeLike) -> List[TypeLike]:
     """
     Iterate over all unions that are used in the dataclass
     """
     lst: Set[TypeLike] = set()
     stack: List[TypeLike] = []  # To prevent infinite recursion
 
-    def recursive(cls: TypeLike) -> None:  # noqa: C901
+    def recursive(cls: TypeLike) -> None:
         if cls in lst:
             return
         if cls in stack:
@@ -413,13 +450,13 @@ def iter_unions(cls: TypeLike) -> List[TypeLike]:  # noqa: C901
     return list(lst)
 
 
-def iter_literals(cls: TypeLike) -> List[TypeLike]:  # noqa: C901
+def iter_literals(cls: TypeLike) -> List[TypeLike]:
     """
     Iterate over all literals that are used in the dataclass
     """
     lst: Set[TypeLike] = set()
 
-    def recursive(cls: TypeLike) -> None:  # noqa: C901
+    def recursive(cls: TypeLike) -> None:
         if cls in lst:
             return
 
@@ -461,6 +498,13 @@ def is_union(typ: Any) -> bool:
     True
     """
 
+    try:
+        # When `_WithTagging` is received, it will check inner type.
+        if isinstance(typ, _WithTagging):
+            return is_union(typ.inner)
+    except Exception:
+        pass
+
     # Python 3.10 Union operator e.g. str | int
     if sys.version_info[:2] >= (3, 10):
         try:
@@ -499,7 +543,12 @@ def is_opt(typ: Any) -> bool:
 
     args = type_args(typ)
     if args:
-        return (is_union_type or is_typing_union) and len(args) == 2 and not is_none(args[0]) and is_none(args[1])
+        return (
+            (is_union_type or is_typing_union)
+            and len(args) == 2
+            and not is_none(args[0])
+            and is_none(args[1])
+        )
     else:
         return typ is Optional
 
@@ -705,6 +754,20 @@ def is_enum(typ: Type[Any]) -> TypeGuard[enum.Enum]:
         return isinstance(typ, enum.Enum)
 
 
+def is_primitive_subclass(typ: Type[Any]) -> bool:
+    """
+    Test if the type is a subclass of primitive type.
+
+    >>> is_primitive_subclass(str)
+    False
+    >>> class Str(str):
+    ...     pass
+    >>> is_primitive_subclass(Str)
+    True
+    """
+    return is_primitive(typ) and typ not in PRIMITIVES and not is_new_type_primitive(typ)
+
+
 def is_primitive(typ: Type[Any]) -> bool:
     """
     Test if the type is primitive.
@@ -812,6 +875,28 @@ def is_ellipsis(typ: Any) -> bool:
     return typ is Ellipsis
 
 
+def get_type_var_names(cls: Type[Any]) -> Optional[List[str]]:
+    """
+    Get type argument names of a generic class.
+
+    >>> T = typing.TypeVar('T')
+    >>> class GenericFoo(typing.Generic[T]):
+    ...     pass
+    >>> get_type_var_names(GenericFoo)
+    ['T']
+    >>> get_type_var_names(int)
+    """
+    bases = getattr(cls, "__orig_bases__", ())
+    if not bases:
+        return None
+
+    type_arg_names: List[str] = []
+    for base in bases:
+        type_arg_names.extend(arg.__name__ for arg in get_args(base))
+
+    return type_arg_names
+
+
 def find_generic_arg(cls: Type[Any], field: TypeVar) -> int:
     """
     Find a type in generic parameters.
@@ -843,56 +928,44 @@ def find_generic_arg(cls: Type[Any], field: TypeVar) -> int:
     return -1
 
 
-def get_generic_arg(typ: Any, index: int) -> Any:
+def get_generic_arg(
+    typ: Any,
+    maybe_generic_type_vars: Optional[List[str]],
+    variable_type_args: Optional[List[str]],
+    index: int,
+) -> Any:
     """
-    Get generic type argument by index.
+    Get generic type argument.
 
     >>> T = typing.TypeVar('T')
     >>> U = typing.TypeVar('U')
     >>> class GenericFoo(typing.Generic[T, U]):
     ...     pass
-    >>> get_generic_arg(GenericFoo[int, str], 0).__name__
+    >>> get_generic_arg(GenericFoo[int, str], ['T', 'U'], ['T', 'U'], 0).__name__
     'int'
-    >>> get_generic_arg(GenericFoo[int, str], 1).__name__
+    >>> get_generic_arg(GenericFoo[int, str], ['T', 'U'], ['T', 'U'], 1).__name__
+    'str'
+    >>> get_generic_arg(GenericFoo[int, str], ['T', 'U'], ['U'], 0).__name__
     'str'
     """
-    if not is_generic(typ):
+    if not is_generic(typ) or maybe_generic_type_vars is None or variable_type_args is None:
         return typing.Any
-    else:
-        args = get_args(typ)
-        if index + 1 > len(args):
-            return typing.Any
-        return args[index]
 
+    args = get_args(typ)
 
-def has_default(field: dataclasses.Field) -> bool:
-    """
-    Test if the field has default value.
+    if len(args) != len(maybe_generic_type_vars):
+        raise SerdeError(
+            f"Number of type args for {typ} does not match number of generic type vars: "
+            f"\n  type args: {args}\n  type_vars: {maybe_generic_type_vars}"
+        )
 
-    >>> @dataclasses.dataclass
-    ... class C:
-    ...     a: int
-    ...     d: int = 10
-    >>> has_default(dataclasses.fields(C)[0])
-    False
-    >>> has_default(dataclasses.fields(C)[1])
-    True
-    """
-    return not isinstance(field.default, dataclasses._MISSING_TYPE)
+    # Get the name of the type var used for this field in the parent class definition
+    type_var_name = variable_type_args[index]
 
+    try:
+        # Find the slot of that type var in the original generic class definition
+        orig_index = maybe_generic_type_vars.index(type_var_name)
+    except ValueError:
+        return typing.Any
 
-def has_default_factory(field: dataclasses.Field) -> bool:
-    """
-    Test if the field has default factory.
-
-    >>> from typing import Dict
-    >>> @dataclasses.dataclass
-    ... class C:
-    ...     a: int
-    ...     d: Dict = dataclasses.field(default_factory=dict)
-    >>> has_default_factory(dataclasses.fields(C)[0])
-    False
-    >>> has_default_factory(dataclasses.fields(C)[1])
-    True
-    """
-    return not isinstance(field.default_factory, dataclasses._MISSING_TYPE)
+    return args[orig_index]

@@ -6,9 +6,23 @@ import os
 import pathlib
 import sys
 import uuid
-from typing import Any, Callable, DefaultDict, Dict, FrozenSet, Generic, List, NewType, Optional, Set, Tuple, TypeVar
+from typing import (
+    Any,
+    Callable,
+    DefaultDict,
+    Dict,
+    FrozenSet,
+    Generic,
+    List,
+    NewType,
+    Optional,
+    Set,
+    Tuple,
+    TypeVar,
+)
 
 import more_itertools
+
 from serde import from_dict, from_tuple, serde, to_dict, to_tuple
 from serde.json import from_json, to_json
 from serde.msgpack import from_msgpack, to_msgpack
@@ -32,18 +46,37 @@ format_toml: List = [(to_toml, from_toml)]
 format_pickle: List = [(to_pickle, from_pickle)]
 
 all_formats: List = (
-    format_dict + format_tuple + format_json + format_msgpack + format_yaml + format_toml + format_pickle
+    format_dict
+    + format_tuple
+    + format_json
+    + format_msgpack
+    + format_yaml
+    + format_toml
+    + format_pickle
 )
 
 T = TypeVar("T")
 
 U = TypeVar("U")
 
+V = TypeVar("V")
+
 
 @serde
 class GenericClass(Generic[T, U]):
     a: T
     b: U
+
+
+@serde
+class Inner(Generic[T]):
+    c: T
+
+
+@serde
+class NestedGenericClass(Generic[U, V]):
+    a: U
+    b: Inner[V]
 
 
 def param(val, typ, filter: Optional[Callable] = None):
@@ -57,8 +90,12 @@ def param(val, typ, filter: Optional[Callable] = None):
     return (val, typ, filter or (lambda se, de, opt: False))
 
 
-def toml_not_supported(se, de, opt) -> bool:
+def toml_not_supported(se: Any, de: Any, opt: Any) -> bool:
     return se is to_toml
+
+
+def yaml_not_supported(se: Any, de: Any, opt: Any) -> bool:
+    return se is to_yaml
 
 
 types: List = [
@@ -89,6 +126,9 @@ types: List = [
     param({"a": [1]}, DefaultDict[str, List[int]]),
     param(data.Pri(10, "foo", 100.0, True), data.Pri),  # dataclass
     param(data.Pri(10, "foo", 100.0, True), Optional[data.Pri]),
+    param(
+        data.PrimitiveSubclass(data.StrSubclass("a")), data.PrimitiveSubclass, yaml_not_supported
+    ),
     param(None, Optional[data.Pri], toml_not_supported),
     param(data.Recur(data.Recur(None, None, None), None, None), data.Recur, toml_not_supported),
     param(
@@ -100,6 +140,7 @@ types: List = [
     param(10, NewType("Int", int)),  # NewType
     param({"a": 1}, Any),  # Any
     param(GenericClass[str, int]("foo", 10), GenericClass[str, int]),  # Generic
+    param(NestedGenericClass[str, int]("foo", Inner[int](10)), NestedGenericClass[str, int]),
     param(pathlib.Path("/tmp/foo"), pathlib.Path),  # Extended types
     param(pathlib.Path("/tmp/foo"), Optional[pathlib.Path]),
     param(None, Optional[pathlib.Path], toml_not_supported),
@@ -115,8 +156,12 @@ types: List = [
     param(ipaddress.IPv6Interface("::1/128"), ipaddress.IPv6Interface),
     param(decimal.Decimal(10), decimal.Decimal),
     param(datetime.datetime.strptime("Jan 1 2021 1:55PM", "%b %d %Y %I:%M%p"), datetime.datetime),
-    param(datetime.datetime.strptime("Jan 1 2021 1:55PM", "%b %d %Y %I:%M%p").date(), datetime.date),
-    param(datetime.datetime.strptime("Jan 1 2021 1:55PM", "%b %d %Y %I:%M%p").time(), datetime.time),
+    param(
+        datetime.datetime.strptime("Jan 1 2021 1:55PM", "%b %d %Y %I:%M%p").date(), datetime.date
+    ),
+    param(
+        datetime.datetime.strptime("Jan 1 2021 1:55PM", "%b %d %Y %I:%M%p").time(), datetime.time
+    ),
 ]
 
 # these types can only be instantiated on their corresponding system
@@ -126,9 +171,13 @@ if os.name == "nt":
     types.append(param(pathlib.WindowsPath("C:\\tmp"), pathlib.WindowsPath))
 
 if sys.version_info[:3] >= (3, 9, 0):
-    types.extend([param([1, 2], list[int]), param({"a": 1}, dict[str, int]), param((1, 1), tuple[int, int])])
+    types.extend(
+        [param([1, 2], list[int]), param({"a": 1}, dict[str, int]), param((1, 1), tuple[int, int])]
+    )
 
-types_combinations: List = [list(more_itertools.flatten(c)) for c in itertools.combinations(types, 2)]
+types_combinations: List = [
+    list(more_itertools.flatten(c)) for c in itertools.combinations(types, 2)
+]
 
 opt_case: List = [
     {"reuse_instances_default": False},

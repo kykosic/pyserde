@@ -1,11 +1,14 @@
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Generic, List, NewType, Optional, Set, Tuple, TypeVar, Union
+from typing import Any, Dict, Generic, List, NewType, Optional, Set, Tuple, TypeVar, Union
+
+import pytest
 
 import serde
 from serde.compat import (
     Literal,
+    get_generic_arg,
     is_dict,
     is_generic,
     is_list,
@@ -25,6 +28,7 @@ from serde.core import is_instance
 from .data import Bool, Float, Int, Pri, PriOpt, Str
 
 T = TypeVar("T")
+U = TypeVar("U")
 
 
 def test_types():
@@ -124,7 +128,9 @@ def test_iter_unions():
         b: Dict[str, List[Union[float, int]]]
         C: Dict[Union[bool, str], Union[float, int]]
 
-    assert {Union[int, str], Union[float, int], Union[bool, str], Union[float, int]} == set(iter_unions(A))
+    assert {Union[int, str], Union[float, int], Union[bool, str], Union[float, int]} == set(
+        iter_unions(A)
+    )
 
 
 def test_type_args():
@@ -210,8 +216,12 @@ def test_is_instance():
     assert not is_instance((10, "a"), Tuple[int, ...])
 
     # Tuple of dataclasses
-    assert is_instance((Int(10), Str("foo"), Float(100.0), Bool(True)), Tuple[Int, Str, Float, Bool])
-    assert not is_instance((Int(10), Str("foo"), Str("wrong-class"), Bool(True)), Tuple[Int, Str, Float, Bool])
+    assert is_instance(
+        (Int(10), Str("foo"), Float(100.0), Bool(True)), Tuple[Int, Str, Float, Bool]
+    )
+    assert not is_instance(
+        (Int(10), Str("foo"), Str("wrong-class"), Bool(True)), Tuple[Int, Str, Float, Bool]
+    )
 
     # Dict
     assert is_instance({}, Dict[str, int])
@@ -236,7 +246,9 @@ def test_is_instance():
 
     # Nested containers
     assert is_instance([({"a": "b"}, 10, [True])], List[Tuple[Dict[str, str], int, List[bool]]])
-    assert not is_instance([({"a": "b"}, 10, ["wrong-type"])], List[Tuple[Dict[str, str], int, List[bool]]])
+    assert not is_instance(
+        [({"a": "b"}, 10, ["wrong-type"])], List[Tuple[Dict[str, str], int, List[bool]]]
+    )
 
 
 @serde.serde
@@ -257,3 +269,19 @@ def test_is_generic():
     assert not serde.is_serializable(GenericFoo[List[int]])
     assert serde.is_deserializable(GenericFoo)
     assert not serde.is_deserializable(GenericFoo[List[int]])
+
+
+def test_get_generic_arg():
+    class GenericFoo(Generic[T, U]):
+        pass
+
+    assert get_generic_arg(GenericFoo[int, str], ["T", "U"], ["T", "U"], 0) == int
+    assert get_generic_arg(GenericFoo[int, str], ["T", "U"], ["T", "U"], 1) == str
+    assert get_generic_arg(GenericFoo[int, str], ["T", "U"], ["U"], 0) == str
+    assert get_generic_arg(GenericFoo[int, str], ["T", "U"], ["V"], 0) == Any
+
+    with pytest.raises(serde.SerdeError):
+        get_generic_arg(GenericFoo[int, str], ["T"], ["T"], 0)
+
+    with pytest.raises(serde.SerdeError):
+        get_generic_arg(GenericFoo[int, str], ["T"], ["U"], 0)

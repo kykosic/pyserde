@@ -1,15 +1,16 @@
 """
-This module provides `deserialize`, `is_deserializable` `from_dict`, `from_tuple` and classes and functions
-associated with deserialization.
+This module provides `deserialize`, `is_deserializable` `from_dict`, `from_tuple` and classes
+and functions associated with deserialization.
 """
 
+from __future__ import annotations
 import abc
 import collections
 import dataclasses
 import functools
 import typing
 from dataclasses import dataclass, is_dataclass
-from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar, overload
+from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar, overload, Union
 
 import jinja2
 from typing_extensions import Type, dataclass_transform
@@ -24,8 +25,7 @@ from .compat import (
     get_args,
     get_generic_arg,
     get_origin,
-    has_default,
-    has_default_factory,
+    get_type_var_names,
     is_any,
     is_bare_dict,
     is_bare_list,
@@ -43,6 +43,7 @@ from .compat import (
     is_none,
     is_opt,
     is_primitive,
+    is_primitive_subclass,
     is_set,
     is_str_serializable,
     is_tuple,
@@ -58,16 +59,19 @@ from .core import (
     FROM_DICT,
     FROM_ITER,
     SERDE_SCOPE,
+    CACHE,
     TYPE_CHECK,
     UNION_DE_PREFIX,
     DefaultTagging,
     Field,
     NoCheck,
-    SerdeScope,
+    Scope,
     Tagging,
     TypeCheck,
     add_func,
     coerce,
+    has_default,
+    has_default_factory,
     ensure,
     fields,
     is_instance,
@@ -79,21 +83,25 @@ from .core import (
 )
 from .numpy import (
     deserialize_numpy_array,
-    deserialize_numpy_array_direct,
     deserialize_numpy_scalar,
+    deserialize_numpy_array_direct,
     is_numpy_array,
     is_numpy_scalar,
 )
 
 __all__ = ["deserialize", "is_deserializable", "from_dict", "from_tuple"]
 
-# Interface of Custom deserialize function.
+
 DeserializeFunc = Callable[[Type[Any], Any], Any]
+""" Interface of Custom deserialize function. """
 
 
-def serde_custom_class_deserializer(cls: Type[Any], datavar, value, custom: DeserializeFunc, default: Callable):
+def serde_custom_class_deserializer(
+    cls: Type[Any], datavar, value, custom: DeserializeFunc, default: Callable
+):
     """
-    Handle custom deserialization. Use default deserialization logic if it receives `SerdeSkip` exception.
+    Handle custom deserialization. Use default deserialization logic if it receives `SerdeSkip`
+    exception.
 
     :param cls: Type of the field.
     :param datavar: The whole variable to deserialize from. e.g. "data"
@@ -107,14 +115,15 @@ def serde_custom_class_deserializer(cls: Type[Any], datavar, value, custom: Dese
         return default()
 
 
-def default_deserializer(_cls: Type[Any], obj):
+def default_deserializer(_cls: Type[Any], obj: Any) -> Any:
     """
-    Marker function to tell serde to use the default deserializer. It's used when custom deserializer is specified
-    at the class but you want to override a field with the default deserializer.
+    Marker function to tell serde to use the default deserializer. It's used when custom
+    deserializer is specified at the class but you want to override a field with the default
+    deserializer.
     """
 
 
-def _get_by_aliases(d: Dict[str, str], aliases: List[str]):
+def _get_by_aliases(d: Dict[str, str], aliases: List[str]) -> str:
     if not aliases:
         raise KeyError("Tried all aliases, but key not found")
     if aliases[0] in d:
@@ -123,7 +132,7 @@ def _get_by_aliases(d: Dict[str, str], aliases: List[str]):
         return _get_by_aliases(d, aliases[1:])
 
 
-def _exists_by_aliases(d: Dict[str, str], aliases: List[str]):
+def _exists_by_aliases(d: Dict[str, str], aliases: List[str]) -> bool:
     for alias in aliases:
         if alias in d:
             return True
@@ -132,14 +141,14 @@ def _exists_by_aliases(d: Dict[str, str], aliases: List[str]):
 
 def _make_deserialize(
     cls_name: str,
-    fields,
-    *args,
+    fields: List[Any],
+    *args: Any,
     rename_all: Optional[str] = None,
     reuse_instances_default: bool = True,
     convert_sets_default: bool = False,
     serializer: Optional[DeserializeFunc] = None,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> Type[Any]:
     """
     Create a deserializable class programatically.
     """
@@ -162,17 +171,18 @@ GENERATION_STACK = []
 
 @dataclass_transform()
 def deserialize(
-    _cls=None,
+    _cls: Optional[Type[T]] = None,
     rename_all: Optional[str] = None,
     reuse_instances_default: bool = True,
     convert_sets_default: bool = False,
     deserializer: Optional[DeserializeFunc] = None,
     tagging: Tagging = DefaultTagging,
     type_check: TypeCheck = NoCheck,
-    **kwargs,
-):
+    **kwargs: Any,
+) -> Type[T]:
     """
-    A dataclass with this decorator is deserializable from any of the data formats supported by pyserde.
+    A dataclass with this decorator is deserializable from any of the data formats supported
+    by pyserde.
 
     >>> from serde import deserialize
     >>> from serde.json import from_json
@@ -190,9 +200,9 @@ def deserialize(
 
     stack = []
 
-    def wrap(cls: Type[Any]):
+    def wrap(cls: Type[T]) -> Type[T]:
         if cls in stack:
-            return
+            return cls
         stack.append(cls)
 
         tagging.check()
@@ -206,9 +216,9 @@ def deserialize(
         # Create a scope storage used by serde.
         # Each class should get own scope. Child classes can not share scope with parent class.
         # That's why we need the "scope.cls is not cls" check.
-        scope: Optional[SerdeScope] = getattr(cls, SERDE_SCOPE, None)
+        scope: Optional[Scope] = getattr(cls, SERDE_SCOPE, None)
         if scope is None or scope.cls is not cls:
-            scope = SerdeScope(cls, reuse_instances_default=reuse_instances_default)
+            scope = Scope(cls, reuse_instances_default=reuse_instances_default)
             setattr(cls, SERDE_SCOPE, scope)
 
         # Set some globals for all generated functions
@@ -217,7 +227,7 @@ def deserialize(
         g["SerdeError"] = SerdeError
         g["UserError"] = UserError
         g["raise_unsupported_type"] = raise_unsupported_type
-        g["typename"] = typename  # used in union functions
+        g["typename"] = typename
         g["ensure"] = ensure
         g["typing"] = typing
         g["collections"] = collections
@@ -230,7 +240,7 @@ def deserialize(
         g["coerce"] = coerce
         g["_exists_by_aliases"] = _exists_by_aliases
         g["_get_by_aliases"] = _get_by_aliases
-        if deserialize:
+        if deserializer:
             g["serde_custom_class_deserializer"] = functools.partial(
                 serde_custom_class_deserializer, custom=deserializer
             )
@@ -243,8 +253,13 @@ def deserialize(
                 # We call deserialize and not wrap to make sure that we will use the default serde
                 # configuration for generating the deserialization function.
                 deserialize(typ)
-            if is_primitive(typ) and not is_enum(typ):
+
+            # We don't want to add primitive class e.g "str" into the scope, but primitive
+            # compatible types such as IntEnum and a subclass of primitives are added,
+            # so that generated code can use those types.
+            if is_primitive(typ) and not is_enum(typ) and not is_primitive_subclass(typ):
                 continue
+
             if is_generic(typ):
                 g[typename(typ)] = get_origin(typ)
             else:
@@ -254,13 +269,18 @@ def deserialize(
         for union in iter_unions(cls):
             union_args = type_args(union)
             add_func(
-                scope, union_func_name(UNION_DE_PREFIX, union_args), render_union_func(cls, union_args, tagging), g
+                scope,
+                union_func_name(UNION_DE_PREFIX, union_args),
+                render_union_func(cls, union_args, tagging),
+                g,
             )
 
         # render literal functions
         for literal in iter_literals(cls):
             literal_args = type_args(literal)
-            add_func(scope, literal_func_name(literal_args), render_literal_func(cls, literal_args), g)
+            add_func(
+                scope, literal_func_name(literal_args), render_literal_func(cls, literal_args), g
+            )
 
         # Collect default values and default factories used in the generated code.
         for f in defields(cls):
@@ -313,7 +333,7 @@ def is_dataclass_without_de(cls: Type[Any]) -> bool:
         return False
     if not hasattr(cls, SERDE_SCOPE):
         return True
-    scope: Optional[SerdeScope] = getattr(cls, SERDE_SCOPE)
+    scope: Optional[Scope] = getattr(cls, SERDE_SCOPE)
     return FROM_DICT not in scope.funcs
 
 
@@ -344,10 +364,18 @@ def from_obj(c: Type[T], o: Any, named: bool, reuse_instances: bool) -> T:
     """
 
     def deserializable_to_obj(cls):
-        serde_scope: SerdeScope = getattr(cls, SERDE_SCOPE)
+        serde_scope: Scope = getattr(cls, SERDE_SCOPE)
         func_name = FROM_DICT if named else FROM_ITER
-        res = serde_scope.funcs[func_name](cls, maybe_generic=maybe_generic, data=o, reuse_instances=reuse_instances)
+        res = serde_scope.funcs[func_name](
+            cls, maybe_generic=maybe_generic, data=o, reuse_instances=reuse_instances
+        )
         return res
+
+    if is_union(c) and not is_opt(c):
+        # If a class in the argument is a non-dataclass class e.g. Union[Foo, Bar],
+        # pyserde generates a wrapper (de)serializable dataclass on the fly,
+        # and use it to deserialize into the object.
+        return CACHE.deserialize_union(c, o)
 
     if is_generic(c):
         # Store subscripted generic type such as Foo[Bar] in "maybe_generic",
@@ -360,8 +388,6 @@ def from_obj(c: Type[T], o: Any, named: bool, reuse_instances: bool) -> T:
         maybe_generic = c
     try:
         thisfunc = functools.partial(from_obj, named=named, reuse_instances=reuse_instances)
-        if o is None:
-            return None
         if is_dataclass_without_de(c):
             deserialize(c)
             return deserializable_to_obj(c)
@@ -372,15 +398,6 @@ def from_obj(c: Type[T], o: Any, named: bool, reuse_instances: bool) -> T:
                 return None
             else:
                 return thisfunc(type_args(c)[0], o)
-        elif is_union(c):
-            v = None
-            for typ in type_args(c):
-                try:
-                    v = thisfunc(typ, o)
-                    break
-                except (SerdeError, ValueError):
-                    pass
-            return v
         elif is_list(c):
             if is_bare_list(c):
                 return list(o)
@@ -411,10 +428,15 @@ def from_obj(c: Type[T], o: Any, named: bool, reuse_instances: bool) -> T:
                 origin = get_origin(v.type)
                 res = collections.defaultdict(
                     origin if origin else v.type,
-                    {thisfunc(type_args(c)[0], k): thisfunc(type_args(c)[1], v) for k, v in o.items()},
+                    {
+                        thisfunc(type_args(c)[0], k): thisfunc(type_args(c)[1], v)
+                        for k, v in o.items()
+                    },
                 )
             else:
-                res = {thisfunc(type_args(c)[0], k): thisfunc(type_args(c)[1], v) for k, v in o.items()}
+                res = {
+                    thisfunc(type_args(c)[0], k): thisfunc(type_args(c)[1], v) for k, v in o.items()
+                }
             return res
         elif is_numpy_array(c):
             return deserialize_numpy_array_direct(c, o)
@@ -458,7 +480,8 @@ def from_dict(cls: Any, o: Dict[str, Any], reuse_instances: bool = ...) -> Any:
 
     You can pass any type supported by pyserde. For example,
 
-    >>> lst = [{'i': 10, 's': 'foo', 'f': 100.0, 'b': True}, {'i': 20, 's': 'foo', 'f': 100.0, 'b': True}]
+    >>> lst = [{'i': 10, 's': 'foo', 'f': 100.0, 'b': True},
+    ...        {'i': 20, 's': 'foo', 'f': 100.0, 'b': True}]
     >>> from_dict(List[Foo], lst)
     [Foo(i=10, s='foo', f=100.0, b=True), Foo(i=20, s='foo', f=100.0, b=True)]
     """
@@ -499,21 +522,29 @@ def from_tuple(cls: Any, o: Any, reuse_instances: bool = ...) -> Any:
 
 
 @dataclass
-class DeField(Field):
+class DeField(Field[T]):
     """
-    Field class for deserialization.
+    Represents a field of dataclass.
     """
 
-    datavar: Optional[str] = None  # name of variable to deserialize from.
-    index: int = 0  # Field index.
-    iterbased: bool = False  # Iterater based deserializer or not.
+    datavar: Optional[str] = None
+    """ Name of variable which is passed in the deserialize API """
 
-    def __getitem__(self, n: int) -> "DeField":
+    index: int = 0
+    """ Field index """
+
+    iterbased: bool = False
+    """ Iterater based deserializer or not """
+
+    def __getitem__(self, n: int) -> Union[DeField[Any], InnerField[Any]]:
         """
-        Access inner `Field` e.g. T of List[T].
+        Get inner `Field` from current `Field`.
+
+        `InnerField` is returned if self is of any standard collection e.g. List.
+        `DeField` is returned if self is Optional.
         """
         typ = type_args(self.type)[n]
-        opts = {
+        opts: Dict[str, Any] = {
             "case": self.case,
             "rename": self.rename,
             "skip": self.skip,
@@ -528,9 +559,17 @@ class DeField(Field):
         elif is_tuple(self.type):
             return InnerField(typ, f"{self.data}[{n}]", datavar=f"{self.data}[{n}]", **opts)
         else:
-            return DeField(typ, self.name, datavar=self.datavar, index=self.index, iterbased=self.iterbased, **opts)
+            # For Optional etc.
+            return DeField(
+                typ,
+                self.name,
+                datavar=self.datavar,
+                index=self.index,
+                iterbased=self.iterbased,
+                **opts,
+            )
 
-    def key_field(self) -> "DeField":
+    def key_field(self) -> DeField[Any]:
         """
         Get inner key field for Dict like class.
         """
@@ -539,7 +578,7 @@ class DeField(Field):
         k.datavar = "k"
         return k
 
-    def value_field(self) -> "DeField":
+    def value_field(self) -> DeField[Any]:
         """
         Get inner value field for Dict like class.
         """
@@ -547,6 +586,20 @@ class DeField(Field):
 
     @property
     def data(self) -> str:
+        """
+        Renders the variable name that possesses the data.
+
+        e.g. Tuple
+            * datavar property returns "data"
+            * data property returns "data[0]".
+        e.g. Optional
+            * datavar property returns "data"
+            * data property returns "data.get("field_name")".
+        For other types
+            * datavar property returns "data"
+            * data property returns "data["field_name"]".
+        """
+
         if self.iterbased:
             return f"{self.datavar}[{self.index}]"
         elif is_union(self.type) and type(None) in get_args(self.type):
@@ -555,10 +608,10 @@ class DeField(Field):
             return f'{self.datavar}["{self.conv_name()}"]'
 
     @data.setter
-    def data(self, d):
+    def data(self, d: str) -> None:
         self.datavar = d
 
-    def data_or(self):
+    def data_or(self) -> str:
         if self.iterbased:
             return self.data
         else:
@@ -566,9 +619,15 @@ class DeField(Field):
 
 
 @dataclass
-class InnerField(DeField):
+class InnerField(DeField[T]):
     """
-    Field for inner type e.g. T of List[T].
+    Field of Inner type. The purpose of this class is to override "data" method
+    for inner type codegen.
+
+    e.g.
+      T of List[T]
+      V of Dict[K, V]
+      T of Optional[T]
     """
 
     @property
@@ -576,11 +635,11 @@ class InnerField(DeField):
         return self.datavar or ""
 
     @data.setter
-    def data(self, d):
+    def data(self, d: str) -> None:
         self.datavar = d
 
 
-def defields(cls: Type[Any]) -> List[DeField]:
+def defields(cls: Type[Any]) -> List[DeField[Any]]:
     return fields(DeField, cls)
 
 
@@ -595,13 +654,18 @@ class Renderer:
     custom: Optional[DeserializeFunc] = None  # Custom class level deserializer.
     import_numpy: bool = False
     suppress_coerce: bool = False
+    """ Disable type coercing in codegen """
 
-    def render(self, arg: DeField) -> str:
+    def render(self, arg: DeField[Any]) -> str:
         """
         Render rvalue
         """
         if arg.deserializer and arg.deserializer.inner is not default_deserializer:
             res = self.custom_field_deserializer(arg)
+        elif is_generic(arg.type):
+            arg.type_args = get_args(arg.type)
+            arg.type = get_origin(arg.type)
+            res = self.render(arg)
         elif is_dataclass(arg.type):
             res = self.dataclass(arg)
         elif is_opt(arg.type):
@@ -622,8 +686,6 @@ class Renderer:
         elif is_numpy_array(arg.type):
             self.import_numpy = True
             res = deserialize_numpy_array(arg)
-        elif is_primitive(arg.type):
-            res = self.primitive(arg)
         elif is_union(arg.type):
             res = self.union_func(arg)
         elif is_str_serializable(arg.type):
@@ -636,15 +698,16 @@ class Renderer:
             res = "None"
         elif is_any(arg.type) or is_ellipsis(arg.type):
             res = arg.data
+        elif is_primitive(arg.type):
+            # For subclasses for primitives e.g. class FooStr(str), coercing is always enabled
+            res = self.primitive(arg, not is_primitive_subclass(arg.type))
         elif isinstance(arg.type, TypeVar):
             index = find_generic_arg(self.cls, arg.type)
             res = (
-                f"from_obj(get_generic_arg(maybe_generic, {index}), "
-                f" {arg.data}, named={not arg.iterbased}, reuse_instances=reuse_instances)"
+                f"from_obj(get_generic_arg(maybe_generic, maybe_generic_type_vars, "
+                f"variable_type_args, {index}), {arg.data}, named={not arg.iterbased}, "
+                "reuse_instances=reuse_instances)"
             )
-        elif is_generic(arg.type):
-            arg.type = get_origin(arg.type)
-            res = self.render(arg)
         elif is_literal(arg.type):
             res = self.literal(arg)
         else:
@@ -655,29 +718,35 @@ class Renderer:
 
         if self.custom and not arg.deserializer:
             # Rerender the code for default deserializer.
-            default = Renderer(self.func, self.cls, None, suppress_coerce=self.suppress_coerce).render(arg)
+            default = Renderer(
+                self.func, self.cls, None, suppress_coerce=self.suppress_coerce
+            ).render(arg)
             return self.custom_class_deserializer(arg, default)
         else:
             return res
 
-    def custom_field_deserializer(self, arg: DeField) -> str:
+    def custom_field_deserializer(self, arg: DeField[Any]) -> str:
         """
         Render rvalue for the field with custom deserializer.
         """
-        assert arg.deserializer
+        if not arg.deserializer:
+            raise SerdeError("Missing custom field deserializer")
         return f"{arg.deserializer.name}({arg.data})"
 
-    def custom_class_deserializer(self, arg: DeField, code: str) -> str:
+    def custom_class_deserializer(self, arg: DeField[Any], code: str) -> str:
         """
         Render custom class deserializer.
         """
         # The function takes a closure in order to execute the default value lazily.
         return (
-            f"serde_custom_class_deserializer({typename(arg.type)}, {arg.datavar}, {arg.data_or()}, "
+            "serde_custom_class_deserializer("
+            f"{typename(arg.type)}, "
+            f"{arg.datavar}, "
+            f"{arg.data_or()}, "
             f"default=lambda: {code})"
         )
 
-    def dataclass(self, arg: DeField) -> str:
+    def dataclass(self, arg: DeField[Any]) -> str:
         if not arg.flatten:
             # e.g. "data['field']" will be used as variable name.
             var = arg.data
@@ -690,7 +759,12 @@ class Renderer:
             else:
                 var = arg.datavar
 
-        opts = "maybe_generic=maybe_generic, reuse_instances=reuse_instances"
+        type_args_str = [str(t).lstrip("~") for t in arg.type_args] if arg.type_args else None
+
+        opts = (
+            "maybe_generic=maybe_generic, maybe_generic_type_vars=maybe_generic_type_vars, "
+            f"variable_type_args={type_args_str}, reuse_instances=reuse_instances"
+        )
 
         if arg.is_self_referencing():
             class_name = "cls"
@@ -699,7 +773,7 @@ class Renderer:
 
         return f"{class_name}.{SERDE_SCOPE}.funcs['{self.func}'](data={var}, {opts})"
 
-    def opt(self, arg: DeField) -> str:
+    def opt(self, arg: DeField[Any]) -> str:
         """
         Render rvalue for Optional.
 
@@ -718,16 +792,17 @@ class Renderer:
         ...     o: Optional[List[int]]
         >>> Renderer('foo').render(DeField(Optional[Foo], 'f', datavar='data'))
         '(Foo.__serde__.funcs[\\'foo\\'](data=data["f"], maybe_generic=maybe_generic, \
+maybe_generic_type_vars=maybe_generic_type_vars, variable_type_args=None, \
 reuse_instances=reuse_instances)) if data.get("f") is not None else None'
         """
-        value = arg[0]
+        value_arg = arg[0]
         if arg.iterbased:
             exists = f"{arg.data} is not None"
         else:
             exists = f'{arg.datavar}.get("{arg.conv_name()}") is not None'
-        return f"({self.render(value)}) if {exists} else None"
+        return f"({self.render(value_arg)}) if {exists} else None"
 
-    def list(self, arg: DeField) -> str:
+    def list(self, arg: DeField[Any]) -> str:
         """
         Render rvalue for list.
 
@@ -743,7 +818,7 @@ reuse_instances=reuse_instances)) if data.get("f") is not None else None'
         else:
             return f"[{self.render(arg[0])} for v in {arg.data}]"
 
-    def set(self, arg: DeField) -> str:
+    def set(self, arg: DeField[Any]) -> str:
         """
         Render rvalue for set.
 
@@ -761,7 +836,7 @@ reuse_instances=reuse_instances)) if data.get("f") is not None else None'
         else:
             return f"set({self.render(arg[0])} for v in {arg.data})"
 
-    def tuple(self, arg: DeField) -> str:
+    def tuple(self, arg: DeField[Any]) -> str:
         """
         Render rvalue for tuple.
 
@@ -771,13 +846,20 @@ reuse_instances=reuse_instances)) if data.get("f") is not None else None'
         >>> Renderer('foo').render(DeField(Tuple[str, int, List[int], Foo], 'd', datavar='data'))
         '(coerce(str, data["d"][0]), coerce(int, data["d"][1]), \
 [coerce(int, v) for v in data["d"][2]], \
-Foo.__serde__.funcs[\\'foo\\'](data=data["d"][3], maybe_generic=maybe_generic, reuse_instances=reuse_instances),)'
+Foo.__serde__.funcs[\\'foo\\'](data=data["d"][3], maybe_generic=maybe_generic, \
+maybe_generic_type_vars=maybe_generic_type_vars, variable_type_args=None, \
+reuse_instances=reuse_instances),)'
 
-        >>> field = DeField(Tuple[str, int, List[int], Foo], 'd', datavar='data', index=0, iterbased=True)
+        >>> field = DeField(Tuple[str, int, List[int], Foo],
+        ...                'd',
+        ...                 datavar='data',
+        ...                 index=0,
+        ...                 iterbased=True)
         >>> Renderer('foo').render(field)
         "(coerce(str, data[0][0]), coerce(int, data[0][1]), \
 [coerce(int, v) for v in data[0][2]], Foo.__serde__.funcs['foo'](data=data[0][3], \
-maybe_generic=maybe_generic, reuse_instances=reuse_instances),)"
+maybe_generic=maybe_generic, maybe_generic_type_vars=maybe_generic_type_vars, \
+variable_type_args=None, reuse_instances=reuse_instances),)"
         """
         if is_bare_tuple(arg.type):
             return f"tuple({arg.data})"
@@ -792,7 +874,7 @@ maybe_generic=maybe_generic, reuse_instances=reuse_instances),)"
                 values.append(self.render(inner))
             return f'({", ".join(values)},)'  # trailing , is required for single element tuples
 
-    def dict(self, arg: DeField) -> str:
+    def dict(self, arg: DeField[Any]) -> str:
         """
         Render rvalue for dict.
 
@@ -803,8 +885,13 @@ maybe_generic=maybe_generic, reuse_instances=reuse_instances),)"
         >>> @deserialize
         ... class Foo: pass
         >>> Renderer('foo').render(DeField(Dict[Foo, List[Foo]], 'f', datavar='data'))
-        '{Foo.__serde__.funcs[\\'foo\\'](data=k, maybe_generic=maybe_generic, reuse_instances=reuse_instances): \
-[Foo.__serde__.funcs[\\'foo\\'](data=v, maybe_generic=maybe_generic, reuse_instances=reuse_instances) for v in v] \
+        '\
+{Foo.__serde__.funcs[\\'foo\\'](data=k, maybe_generic=maybe_generic, \
+maybe_generic_type_vars=maybe_generic_type_vars, variable_type_args=None, \
+reuse_instances=reuse_instances): \
+[Foo.__serde__.funcs[\\'foo\\'](data=v, maybe_generic=maybe_generic, \
+maybe_generic_type_vars=maybe_generic_type_vars, \
+variable_type_args=None, reuse_instances=reuse_instances) for v in v] \
 for k, v in data["f"].items()}'
         """
         if is_bare_dict(arg.type):
@@ -827,12 +914,14 @@ for k, v in data["f"].items()}'
             v = arg.value_field()
             return f"{{{self.render(k)}: {self.render(v)} for k, v in {arg.data}.items()}}"
 
-    def enum(self, arg: DeField) -> str:
+    def enum(self, arg: DeField[Any]) -> str:
         return f"{typename(arg.type)}({self.primitive(arg)})"
 
-    def primitive(self, arg: DeField, suppress_coerce: bool = False) -> str:
+    def primitive(self, arg: DeField[Any], suppress_coerce: bool = False) -> str:
         """
         Render rvalue for primitives.
+
+        * `suppress_coerce`: Overrides "suppress_coerce" in the Renderer's field
 
         >>> Renderer('foo').render(DeField(int, 'i', datavar='data'))
         'coerce(int, data["i"])'
@@ -848,28 +937,38 @@ for k, v in data["f"].items()}'
         if arg.alias:
             aliases = (f'"{s}"' for s in [arg.name, *arg.alias])
             dat = f"_get_by_aliases(data, [{','.join(aliases)}])"
-        if self.suppress_coerce:
+        if self.suppress_coerce and suppress_coerce:
             return dat
         else:
             return f"coerce({typ}, {dat})"
 
-    def c_tor(self, arg: DeField) -> str:
+    def c_tor(self, arg: DeField[Any]) -> str:
         return f"{typename(arg.type)}({arg.data})"
 
-    def c_tor_with_check(self, arg: DeField, ctor: Optional[str] = None) -> str:
+    def c_tor_with_check(self, arg: DeField[Any], ctor: Optional[str] = None) -> str:
         if ctor is None:
             ctor = self.c_tor(arg)
         return f"{arg.data} if isinstance({arg.data}, {typename(arg.type)}) else {ctor}"
 
-    def union_func(self, arg: DeField) -> str:
+    def union_func(self, arg: DeField[Any]) -> str:
         func_name = union_func_name(UNION_DE_PREFIX, type_args(arg.type))
-        return f"serde_scope.funcs['{func_name}'](cls=cls, data={arg.data}, reuse_instances=reuse_instances)"
+        return (
+            f"serde_scope.funcs['{func_name}']("
+            "cls=cls, "
+            f"data={arg.data}, "
+            "reuse_instances=reuse_instances)"
+        )
 
-    def literal(self, arg: DeField) -> str:
+    def literal(self, arg: DeField[Any]) -> str:
         func_name = literal_func_name(type_args(arg.type))
-        return f"serde_scope.funcs['{func_name}'](cls=cls, data={arg.data}, reuse_instances=reuse_instances)"
+        return (
+            f"serde_scope.funcs['{func_name}']("
+            "cls=cls, "
+            f"data={arg.data}, "
+            "reuse_instances=reuse_instances)"
+        )
 
-    def default(self, arg: DeField, code: str) -> str:
+    def default(self, arg: DeField[Any], code: str) -> str:
         if arg.alias:
             aliases = (f'"{s}"' for s in [arg.name, *arg.alias])
             exists = f'_exists_by_aliases({arg.datavar}, [{",".join(aliases)}])'
@@ -883,31 +982,33 @@ for k, v in data["f"].items()}'
             return code
 
 
-def to_arg(f: DeField, index: int, rename_all: Optional[str] = None) -> DeField:
+def to_arg(f: DeField[T], index: int, rename_all: Optional[str] = None) -> DeField[T]:
     f.index = index
     f.data = "data"
     f.case = f.case or rename_all
     return f
 
 
-def to_iter_arg(f: DeField, *args, **kwargs) -> DeField:
+def to_iter_arg(f: DeField[T], *args: Any, **kwargs: Any) -> DeField[T]:
     f = to_arg(f, *args, **kwargs)
     f.iterbased = True
     return f
 
 
-def renderable(f: DeField) -> bool:
+def renderable(f: DeField[Any]) -> bool:
     return f.init
 
 
-def render_from_iter(cls: Type[Any], custom: Optional[DeserializeFunc] = None, type_check: TypeCheck = NoCheck) -> str:
+def render_from_iter(
+    cls: Type[Any], custom: Optional[DeserializeFunc] = None, type_check: TypeCheck = NoCheck
+) -> str:
     template = """
-def {{func}}(cls=cls, maybe_generic=None, data=None, reuse_instances = {{serde_scope.reuse_instances_default}}):
+def {{func}}(cls=cls, maybe_generic=None, maybe_generic_type_vars=None, data=None,
+             variable_type_args=None, reuse_instances = {{serde_scope.reuse_instances_default}}):
   if reuse_instances is Ellipsis:
     reuse_instances = {{serde_scope.reuse_instances_default}}
 
-  if data is None:
-    return None
+  maybe_generic_type_vars = maybe_generic_type_vars or {{cls_type_vars}}
 
   {% for f in fields %}
   __{{f.name}} = {{f|arg(loop.index-1)|rvalue}}
@@ -923,12 +1024,19 @@ def {{func}}(cls=cls, maybe_generic=None, data=None, reuse_instances = {{serde_s
     raise UserError(e)
     """
 
-    renderer = Renderer(FROM_ITER, cls=cls, custom=custom, suppress_coerce=(not type_check.is_coerce()))
+    renderer = Renderer(
+        FROM_ITER, cls=cls, custom=custom, suppress_coerce=(not type_check.is_coerce())
+    )
     env = jinja2.Environment(loader=jinja2.DictLoader({"iter": template}))
     env.filters.update({"rvalue": renderer.render})
     env.filters.update({"arg": to_iter_arg})
     fields = list(filter(renderable, defields(cls)))
-    res = env.get_template("iter").render(func=FROM_ITER, serde_scope=getattr(cls, SERDE_SCOPE), fields=fields)
+    res = env.get_template("iter").render(
+        func=FROM_ITER,
+        serde_scope=getattr(cls, SERDE_SCOPE),
+        fields=fields,
+        cls_type_vars=get_type_var_names(cls),
+    )
 
     if renderer.import_numpy:
         res = "import numpy\n" + res
@@ -943,13 +1051,12 @@ def render_from_dict(
     type_check: TypeCheck = NoCheck,
 ) -> str:
     template = """
-def {{func}}(cls=cls, maybe_generic=None, data=None,
-             reuse_instances = {{serde_scope.reuse_instances_default}}):
+def {{func}}(cls=cls, maybe_generic=None, maybe_generic_type_vars=None, data=None,
+             variable_type_args=None, reuse_instances = {{serde_scope.reuse_instances_default}}):
   if reuse_instances is Ellipsis:
     reuse_instances = {{serde_scope.reuse_instances_default}}
 
-  if data is None:
-    return None
+  maybe_generic_type_vars = maybe_generic_type_vars or {{cls_type_vars}}
 
   {% for f in fields %}
   __{{f.name}} = {{f|arg(loop.index-1)|rvalue}}
@@ -958,7 +1065,11 @@ def {{func}}(cls=cls, maybe_generic=None, data=None,
   try:
     rv = cls(
     {% for f in fields %}
+    {% if f.kw_only %}
+    {{f.name}}=__{{f.name}},
+    {% else %}
     __{{f.name}},
+    {% endif %}
     {% endfor %}
     )
   except Exception as e:
@@ -971,13 +1082,19 @@ def {{func}}(cls=cls, maybe_generic=None, data=None,
   return rv
     """
 
-    renderer = Renderer(FROM_DICT, cls=cls, custom=custom, suppress_coerce=(not type_check.is_coerce()))
+    renderer = Renderer(
+        FROM_DICT, cls=cls, custom=custom, suppress_coerce=(not type_check.is_coerce())
+    )
     env = jinja2.Environment(loader=jinja2.DictLoader({"dict": template}))
     env.filters.update({"rvalue": renderer.render})
     env.filters.update({"arg": functools.partial(to_arg, rename_all=rename_all)})
     fields = list(filter(renderable, defields(cls)))
     res = env.get_template("dict").render(
-        func=FROM_DICT, serde_scope=getattr(cls, SERDE_SCOPE), fields=fields, type_check=type_check
+        func=FROM_DICT,
+        serde_scope=getattr(cls, SERDE_SCOPE),
+        fields=fields,
+        type_check=type_check,
+        cls_type_vars=get_type_var_names(cls),
     )
 
     if renderer.import_numpy:
@@ -986,9 +1103,12 @@ def {{func}}(cls=cls, maybe_generic=None, data=None,
     return res
 
 
-def render_union_func(cls: Type[Any], union_args: List[Type[Any]], tagging: Tagging = DefaultTagging) -> str:
+def render_union_func(
+    cls: Type[Any], union_args: List[Type[Any]], tagging: Tagging = DefaultTagging
+) -> str:
     template = """
-def {{func}}(cls=cls, maybe_generic=None, data=None, reuse_instances = {{serde_scope.reuse_instances_default}}):
+def {{func}}(cls=cls, maybe_generic=None, maybe_generic_type_vars=None, data=None,
+             variable_type_args=None, reuse_instances = {{serde_scope.reuse_instances_default}}):
   errors = []
   {% for t in union_args %}
   try:
@@ -1044,9 +1164,12 @@ def {{func}}(cls=cls, maybe_generic=None, data=None, reuse_instances = {{serde_s
     )
 
 
-def render_literal_func(cls: Type[Any], literal_args: List[Any], tagging: Tagging = DefaultTagging) -> str:
+def render_literal_func(
+    cls: Type[Any], literal_args: List[Any], tagging: Tagging = DefaultTagging
+) -> str:
     template = """
-def {{func}}(cls=cls, maybe_generic=None, data=None, reuse_instances = {{serde_scope.reuse_instances_default}}):
+def {{func}}(cls=cls, maybe_generic=None, maybe_generic_type_vars=None, data=None,
+             variable_type_args=None, reuse_instances = {{serde_scope.reuse_instances_default}}):
   if data in ({%- for v in literal_args -%}{{v|repr}},{%- endfor -%}):
     return data
   raise SerdeError("Can not deserialize " + repr(data) + " as {{literal_name}}.")

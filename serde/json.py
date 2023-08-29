@@ -1,7 +1,7 @@
 """
 Serialize and Deserialize in JSON format.
 """
-from typing import Any, overload
+from typing import Any, overload, Optional
 
 from typing_extensions import Type
 
@@ -51,18 +51,23 @@ class JsonDeserializer(Deserializer[str]):
         return json_loads(data, **opts)
 
 
-def to_json(obj: Any, se: Type[Serializer[str]] = JsonSerializer, **opts: Any) -> str:
+def to_json(
+    obj: Any, cls: Optional[Any] = None, se: Type[Serializer[str]] = JsonSerializer, **opts: Any
+) -> str:
     """
-    Serialize the object into JSON str. [orjson](https://github.com/ijl/orjson) will be used if installed.
+    Serialize the object into JSON str. [orjson](https://github.com/ijl/orjson)
+    will be used if installed.
 
-    You can pass any serializable `obj`. If you supply other keyword arguments, they will be passed in `dumps`
-    function.
-    By default, numpy objects are serialized, this behaviour can be customized with the `option` argument with
-    [orjson](https://github.com/ijl/orjson#numpy), or the `default` argument with Python standard json library.
+    You can pass any serializable `obj`. If you supply other keyword arguments,
+    they will be passed in `dumps` function.
+    By default, numpy objects are serialized, this behaviour can be customized with the `option`
+    argument with [orjson](https://github.com/ijl/orjson#numpy), or the `default` argument with
+    Python standard json library.
 
-    If you want to use another json package, you can subclass `JsonSerializer` and implement your own logic.
+    If you want to use another json package, you can subclass `JsonSerializer` and implement
+    your own logic.
     """
-    return se.serialize(to_dict(obj, reuse_instances=False, convert_sets=True), **opts)
+    return se.serialize(to_dict(obj, c=cls, reuse_instances=False, convert_sets=True), **opts)
 
 
 @overload
@@ -78,11 +83,13 @@ def from_json(c: Any, s: str, de: Type[Deserializer[str]] = JsonDeserializer, **
 
 def from_json(c: Any, s: str, de: Type[Deserializer[str]] = JsonDeserializer, **opts: Any) -> Any:
     """
-    Deserialize from JSON into the object. [orjson](https://github.com/ijl/orjson) will be used if installed.
+    Deserialize from JSON into the object. [orjson](https://github.com/ijl/orjson) will be used
+    if installed.
 
-    `c` is a class obejct and `s` is JSON bytes or str. If you supply other keyword arguments, they will be passed in
-    `loads` function.
+    `c` is a class obejct and `s` is JSON bytes or str. If you supply other keyword arguments,
+    they will be passed in `loads` function.
 
-    If you want to use another json package, you can subclass `JsonDeserializer` and implement your own logic.
+    If you want to use another json package, you can subclass `JsonDeserializer` and implement
+    your own logic.
     """
     return from_dict(c, de.deserialize(s, **opts), reuse_instances=False)

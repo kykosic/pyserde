@@ -57,7 +57,7 @@ pytest = "*"
 pytest-cov = "*"
 pytest-watch = "*"
 pytest-flake8 = "*"
-coverage = "==4.5.4"
+coverage = "==7.2.7"
 pdoc = "^13"
 more-itertools = "~=8.6.0"
 pre-commit = "==v2.10.1"
@@ -84,18 +84,40 @@ style = "pep440"
 
 [tool.black]
 target_version = ["py311"]
-line_length = 120
+line_length = 100
 
 [tool.pyright]
-include = ["examples", "serde/json.py", "serde/msgpack.py", "serde/toml.py", "serde/yaml.py", "serde/pickle.py"]
-exclude = ["serde/core.py", "serde/compat.py", "serde/se.py", "serde/de.py", "serde/__init__.py", "serde/numpy.py", "serde/inspect.py", "bench", "tests"]
+include = [
+  "examples",
+  "serde/core.py",
+  "serde/compat.py",
+  "serde/inspect.py",
+  "serde/json.py",
+  "serde/se.py",
+  "serde/msgpack.py",
+  "serde/toml.py",
+  "serde/yaml.py",
+  "serde/pickle.py"
+]
+exclude = [
+  "serde/de.py",
+  "serde/numpy.py",
+  "bench",
+  "tests",
+  "serde/__init__.py"
+]
 pythonVersion = "3.11"
 reportMissingImports = false
 
 [tool.mypy]
 strict = true
 ignore_missing_imports = true
-exclude = ["serde/core.py", "serde/compat.py", "serde/se.py", "serde/de.py", "serde/__init__.py", "serde/numpy.py", "serde/inspect.py", "bench", "tests"]
+exclude = [
+  "serde/de.py",
+  "serde/numpy.py",
+  "bench",
+  "tests"
+]
 
 [tool.ruff]
 select = [
@@ -105,4 +127,7 @@ select = [
     "C",  # flake8-comprehensions
     "B",  # flake8-bugbear
 ]
-line-length = 120
+line-length = 100
+
+[tool.ruff.mccabe]
+max-complexity = 30

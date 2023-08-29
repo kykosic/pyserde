@@ -2,7 +2,7 @@
 Serialize and Deserialize in Pickle format.
 """
 import pickle
-from typing import Type, Any, overload
+from typing import Type, Any, overload, Optional
 
 from .compat import T
 from .de import Deserializer, from_dict
@@ -23,20 +23,28 @@ class PickleDeserializer(Deserializer[bytes]):
         return pickle.loads(data, **opts)
 
 
-def to_pickle(obj: Any, se: Type[Serializer[bytes]] = PickleSerializer, **opts: Any) -> bytes:
-    return se.serialize(to_dict(obj, reuse_instances=False), **opts)
+def to_pickle(
+    obj: Any, cls: Optional[Any] = None, se: Type[Serializer[bytes]] = PickleSerializer, **opts: Any
+) -> bytes:
+    return se.serialize(to_dict(obj, c=cls, reuse_instances=False), **opts)
 
 
 @overload
-def from_pickle(c: Type[T], data: bytes, de: Type[Deserializer[bytes]] = PickleDeserializer, **opts: Any) -> T:
+def from_pickle(
+    c: Type[T], data: bytes, de: Type[Deserializer[bytes]] = PickleDeserializer, **opts: Any
+) -> T:
     ...
 
 
 @overload
-def from_pickle(c: Any, data: bytes, de: Type[Deserializer[bytes]] = PickleDeserializer, **opts: Any) -> Any:
+def from_pickle(
+    c: Any, data: bytes, de: Type[Deserializer[bytes]] = PickleDeserializer, **opts: Any
+) -> Any:
     ...
 
 
 # For Union, Optional etc.
-def from_pickle(c: Any, data: bytes, de: Type[Deserializer[bytes]] = PickleDeserializer, **opts: Any) -> Any:
+def from_pickle(
+    c: Any, data: bytes, de: Type[Deserializer[bytes]] = PickleDeserializer, **opts: Any
+) -> Any:
     return from_dict(c, de.deserialize(data, **opts), reuse_instances=False)

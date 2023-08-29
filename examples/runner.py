@@ -3,6 +3,7 @@ import sys
 import alias
 import any
 import class_var
+import primitive_subclass
 import collection
 import custom_class_serializer
 import custom_field_serializer
@@ -39,6 +40,7 @@ import type_datetime
 import type_decimal
 import union
 import union_tagging
+import union_directly
 import user_exception
 import variable_length_tuple
 import yamlfile
@@ -72,6 +74,7 @@ def run_all() -> None:
     run(type_decimal)
     run(type_datetime)
     run(union_tagging)
+    run(union_directly)
     run(generics)
     run(generics_nested)
     run(nested)
@@ -93,10 +96,13 @@ def run_all() -> None:
     run(plain_dataclass)
     run(plain_dataclass_class_attribute)
     run(msg_pack)
+    run(primitive_subclass)
     if PY310:
         import union_operator
+        import kw_only
 
         run(union_operator)
+        run(kw_only)
 
 
 def run(module: typing.Any) -> None:
