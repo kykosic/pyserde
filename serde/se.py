@@ -588,7 +588,7 @@ def {{func}}(obj, reuse_instances, convert_sets):
   union_args = serde_scope.union_se_args['{{func}}']
 
   {% for t in union_args %}
-  if is_instance(obj, union_args[{{loop.index0}}]):
+  if type(obj) is union_args[{{loop.index0}}]:
     {% if tagging.is_external() and is_taggable(t) %}
     return {"{{t|typename}}": {{t|arg|rvalue}}}
 
